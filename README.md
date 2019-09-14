@@ -1,5 +1,7 @@
 # ![DSVPN](https://raw.github.com/jedisct1/dsvpn/master/logo.png)
 
+![GitHub CI status](https://github.com/jedisct1/dsvpn/workflows/CI/badge.svg)
+
 DSVPN is a Dead Simple VPN, designed to address the most common use case for using a VPN:
 
 ```text
@@ -9,10 +11,11 @@ DSVPN is a Dead Simple VPN, designed to address the most common use case for usi
 Features:
 
 * Runs on TCP. Works pretty much everywhere, including on public WiFi where only TCP/443 is open or reliable.
-* Low and constant memory footprint. Doesn't perform any heap memory allocations.
+* Uses only modern cryptography, with formally verified implementations.
+* Small and constant memory footprint. Doesn't perform any heap memory allocations.
 * Small (~25 KB), with an equally small and readable code base. No external dependencies.
 * Works out of the box. No lousy documentation to read. No configuration file. No post-configuration. Run a single-line command on the server, a similar one on the client and you're done. No firewall and routing rules to manually mess with.
-* Works with Linux (client, server) and MacOS/OpenBSD (client). Adding support for other operating systems is trivial.
+* Works on Linux (kernel >= 3.17), MacOS and OpenBSD, as well as DragonFly BSD, FreeBSD and NetBSD in client and point-to-point modes. Adding support for other operating systems is trivial.
 * Doesn't leak between reconnects if the network doesn't change. Blocks IPv6 on the client to prevent IPv6 leaks.
 
 Next:
@@ -42,8 +45,10 @@ make
 On Raspberry Pi 3 and 4, use the following command instead to enable NEON optimizations:
 
 ```sh
-env OPTFLAGS=-fcpu=neon make
+env OPTFLAGS=-mfpu=neon make
 ```
+
+On MacOS, it can be installed using Homebrew: `brew install nnathan/dsvpn/dsvpn`.
 
 ## Secret key
 
@@ -54,6 +59,13 @@ dd if=/dev/urandom of=vpn.key count=1 bs=32
 ```
 
 And copy it on the server and the client.
+
+If required, keys can be exported and imported in printable form:
+
+```sh
+base64 < vpn.key
+echo 'HK940OkWcFqSmZXnCQ1w6jhQMZm0fZoEhQOOpzJ/l3w=' | base64 --decode > vpn.key
+```
 
 ## Example usage on the server
 
@@ -69,7 +81,7 @@ Here, I use port `1959`. Everything else is set to the default values. If you wa
 sudo ./dsvpn client vpn.key 34.216.127.34 1959
 ```
 
-This is a MacOS client, connecting to the VPN server `34.216.127.34` on port `1959`. The port number is optional here as well.
+This is a MacOS client, connecting to the VPN server `34.216.127.34` on port `1959`. The port number is optional here as well. And the IP can be replaced by a host name.
 
 ## That's it
 
@@ -90,7 +102,7 @@ Or send a pull request implementing the required commands to change and revert t
 ```text
 dsvpn   "server"
         <key file>
-        <vpn server ip>|"auto"
+        <vpn server ip or name>|"auto"
         <vpn server port>|"auto"
         <tun interface>|"auto"
         <local tun ip>|"auto"
@@ -99,7 +111,7 @@ dsvpn   "server"
 
 dsvpn   "client"
         <key file>
-        <vpn server ip>
+        <vpn server ip or name>
         <vpn server port>|"auto"
         <tun interface>|"auto"
         <local tun ip>|"auto"
@@ -109,7 +121,7 @@ dsvpn   "client"
 
 * `server`|`client`: use `server` on the server, and `client` on clients.
 * `<key file>`: path to the file with the secret key (e.g. `vpn.key`).
-* `<vpn server ip>`: on the client, it should be the IP address or the hostname of the server. On the server, it doesn't matter, so you can just use `auto`.
+* `<vpn server ip or name>`: on the client, it should be the IP address or the hostname of the server. On the server, it doesn't matter, so you can just use `auto`.
 * `<vpn server port>`: the TCP port to listen to/connect to for the VPN. Use 443 or anything else. `auto` will use `443`.
 * `<tun interface>`: this is the name of the VPN interface. On Linux, you can set it to anything. Or MacOS, it has to follow a more boring pattern. If you feel lazy, just use `auto` here.
 * `<local tun ip>`: local IP address of the tunnel. Use any private IP address that you don't use here.
@@ -118,6 +130,11 @@ dsvpn   "client"
 * `<gateway ip>` (client only): the internal router IP address. The first line printed by `netstat -rn` will tell you (`gateway`).
 
 If all the remaining parameters of a command would be `auto`, they don't have to be specified.
+
+## Related projects
+
+* Robert Debock maintains [an Ansible role for DSVPN](https://github.com/robertdebock/ansible-role-dsvpn)
+* [OpenMPTCProuter](http://www.openmptcprouter.com/) is an OpenWRT-based router OS that supports DSVPN
 
 ## Why
 
@@ -145,4 +162,4 @@ The cryptographic primitives used in DSVPN are available as a standalone project
 
 None.
 
-This is not intended to be a replacement for GloryTun or WireGuard. This is a weekend project, and this is what I use, because it solves a problem I had. Extending it to solve different problems is not planned, but feel free to fork it and tailor it to your needs!
+This is not intended to be a replacement for GloryTun or WireGuard. This is what I use, because it solves a problem I had. Extending it to solve different problems is not planned, but feel free to fork it and tailor it to your needs!

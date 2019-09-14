@@ -35,12 +35,18 @@
 #include <sys/sys_domain.h>
 #endif
 
+#define VERSION_STRING "0.1.3"
+
+#ifdef __NetBSD__
+#define DEFAULT_MTU 1500
+#else
 #define DEFAULT_MTU 9000
-#define RECONNECT_ATTEMPTS 30
+#endif
+#define RECONNECT_ATTEMPTS 100
 #define TAG_LEN 6
 #define MAX_PACKET_LEN 65536
 #define TS_TOLERANCE 7200
-#define TIMEOUT (120 * 1000)
+#define TIMEOUT (60 * 1000)
 #define OUTER_CONGESTION_CONTROL_ALG "bbr"
 #define BUFFERBLOAT_CONTROL 1
 #define NOTSENT_LOWAT (128 * 1024)
@@ -62,5 +68,7 @@
 #define endian_swap32(x) (x)
 #define endian_swap64(x) (x)
 #endif
+
+extern volatile sig_atomic_t exit_signal_received;
 
 #endif
