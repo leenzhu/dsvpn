@@ -24,6 +24,7 @@ typedef struct Context_ {
     const char *  server_port;
     const char *  ext_if_name;
     const char *  wanted_ext_gw_ip;
+    char          client_ip[NI_MAXHOST];
     char          ext_gw_ip[64];
     char          server_ip[64];
     char          if_name[IFNAMSIZ];
@@ -149,8 +150,8 @@ static int tcp_listener(const char *address, const char *port)
     (void) setsockopt(listen_fd, IPPROTO_IPV6, IPV6_V6ONLY, (char *) (int[]){ 0 }, sizeof(int));
 #endif
 #ifdef TCP_DEFER_ACCEPT
-    (void) setsockopt(listen_fd, SOL_TCP, TCP_DEFER_ACCEPT, (char *) (int[]){ TIMEOUT / 1000 },
-                      sizeof(int));
+    (void) setsockopt(listen_fd, SOL_TCP, TCP_DEFER_ACCEPT,
+                      (char *) (int[]){ ACCEPT_TIMEOUT / 1000 }, sizeof(int));
 #endif
     printf("Listening to %s:%s\n", address == NULL ? "*" : address, port);
     if (bind(listen_fd, (struct sockaddr *) res->ai_addr, (socklen_t) res->ai_addrlen) != 0 ||
@@ -185,15 +186,9 @@ static int server_key_exchange(Context *context, const int client_fd)
 
     memcpy(st, context->uc_kx_st, sizeof st);
     errno = EACCES;
-#ifdef TCP_DEFER_ACCEPT
-    if (safe_read_partial(client_fd, pkt1, sizeof pkt1) != sizeof pkt1) {
+    if (safe_read(client_fd, pkt1, sizeof pkt1, ACCEPT_TIMEOUT) != sizeof pkt1) {
         return -1;
     }
-#else
-    if (safe_read(client_fd, pkt1, sizeof pkt1, TIMEOUT) != sizeof pkt1) {
-        return -1;
-    }
-#endif
     uc_hash(st, h, pkt1, 32 + 8);
     if (memcmp(h, pkt1 + 32 + 8, 32) != 0) {
         return -1;
@@ -223,16 +218,16 @@ static int server_key_exchange(Context *context, const int client_fd)
 
 static int tcp_accept(Context *context, int listen_fd)
 {
-    char                    client_ip[NI_MAXHOST];
-    struct sockaddr_storage client_sa;
-    socklen_t               client_sa_len = sizeof client_sa;
+    char                    client_ip[NI_MAXHOST] = { 0 };
+    struct sockaddr_storage client_ss;
+    socklen_t               client_ss_len = sizeof client_ss;
     int                     client_fd;
     int                     err;
 
-    if ((client_fd = accept(listen_fd, (struct sockaddr *) &client_sa, &client_sa_len)) < 0) {
+    if ((client_fd = accept(listen_fd, (struct sockaddr *) &client_ss, &client_ss_len)) < 0) {
         return -1;
     }
-    if (client_sa_len <= (socklen_t) 0U) {
+    if (client_ss_len <= (socklen_t) 0U) {
         (void) close(client_fd);
         errno = EINTR;
         return -1;
@@ -243,17 +238,25 @@ static int tcp_accept(Context *context, int listen_fd)
         errno = err;
         return -1;
     }
-    getnameinfo((const struct sockaddr *) (const void *) &client_sa, client_sa_len, client_ip,
+    getnameinfo((const struct sockaddr *) (const void *) &client_ss, client_ss_len, client_ip,
                 sizeof client_ip, NULL, 0, NI_NUMERICHOST | NI_NUMERICSERV);
     printf("Connection attempt from [%s]\n", client_ip);
     context->congestion = 0;
     fcntl(client_fd, F_SETFL, fcntl(client_fd, F_GETFL, 0) | O_NONBLOCK);
+    if (context->client_fd != -1 &&
+        memcmp(context->client_ip, client_ip, sizeof context->client_ip) != 0) {
+        fprintf(stderr, "Closing: a session from [%s] is already active\n", context->client_ip);
+        (void) close(client_fd);
+        errno = EBUSY;
+        return -1;
+    }
     if (server_key_exchange(context, client_fd) != 0) {
         fprintf(stderr, "Authentication failed\n");
         (void) close(client_fd);
         errno = EACCES;
         return -1;
     }
+    memcpy(context->client_ip, client_ip, sizeof context->client_ip);
     return client_fd;
 }
 
@@ -293,10 +296,11 @@ static int client_key_exchange(Context *context)
 
 static int client_connect(Context *context)
 {
-    const char *ext_gw_ip;
+    const char *ext_gw_ip = NULL;
 
     context->client_buf.pos = 0;
     memset(context->client_buf.data, 0, sizeof context->client_buf.data);
+#ifndef NO_DEFAULT_ROUTES
     if (context->wanted_ext_gw_ip == NULL && (ext_gw_ip = get_default_gw_ip()) != NULL &&
         strcmp(ext_gw_ip, context->ext_gw_ip) != 0) {
         printf("Gateway changed from [%s] to [%s]\n", context->ext_gw_ip, ext_gw_ip);
@@ -304,6 +308,7 @@ static int client_connect(Context *context)
         snprintf(context->ext_gw_ip, sizeof context->ext_gw_ip, "%s", ext_gw_ip);
         firewall_rules(context, 1, 0);
     }
+#endif
     memset(context->uc_st, 0, sizeof context->uc_st);
     context->uc_st[context->is_server][0] ^= 1;
     context->client_fd = tcp_client(context->server_ip, context->server_port);
@@ -513,7 +518,11 @@ __attribute__((noreturn)) static void usage(void)
          "\n\n"
          "dsvpn\t\"client\"\n\t<key file>\n\t<vpn server ip or name>\n\t<vpn server "
          "port>|\"auto\"\n\t<tun interface>|\"auto\"\n\t<local tun "
-         "ip>|\"auto\"\n\t<remote tun ip>|\"auto\"\n\t<gateway ip>\"auto\"\n");
+         "ip>|\"auto\"\n\t<remote tun ip>|\"auto\"\n\t<gateway ip>|\"auto\"\n\n"
+         "Example:\n\n[server]\n\tdd if=/dev/urandom of=vpn.key count=1 bs=32\t# create key\n"
+         "\tbase64 < vpn.key\t\t# copy key as a string\n\tsudo ./dsvpn server vpn.key\t# listen on "
+         "443\n\n[client]\n\techo ohKD...W4= | base64 --decode > vpn.key\t# paste key\n"
+         "\tsudo ./dsvpn client vpn.key 34.216.127.34\n");
     exit(254);
 }
 
